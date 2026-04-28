@@ -1,6 +1,6 @@
 {
   "name": "carbonware-flipbook",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A polished, cross-device PDF flipbook plugin. Vanilla JS + CSS, built on PDF.js.",
   "main": "src/carbonware-flipbook.js",
   "style": "src/carbonware-flipbook.css",

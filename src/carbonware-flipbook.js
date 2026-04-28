@@ -109,7 +109,7 @@
     this.renderScale = 1;   // last canvas-render scale (re-renders past 1.5)
     this.cache = {};        // pageNum:scale → canvas
     this.mode = 'spread-flip'; // 'spread-flip' | 'spread-slide' | 'single'
-    this.pageSize = { w: 612, h: 792 }; // Native page CSS pixels (default US Letter)
+    this.pageSizes = [];    // [{w,h}, ...] one entry per PDF page (1-indexed: pageSizes[n-1])
     this.flipping = false;
     this.chromeIdleTimer = null;
     this.modal = null;
@@ -340,10 +340,18 @@
           self.totalPages = pdf.numPages;
           self._refs.tot.textContent = pdf.numPages;
           self._refs.cur.textContent = '1';
-          // Capture native page size from page 1
-          return pdf.getPage(1).then(function (page) {
-            var v = page.getViewport({ scale: 1 });
-            self.pageSize = { w: v.width, h: v.height };
+          // Capture native size of every page so we can keep aspect ratios
+          // independent (some brochures mix portrait covers with double-wide
+          // designed-as-spread inner pages).
+          var jobs = [];
+          for (var i = 1; i <= pdf.numPages; i++) {
+            jobs.push(pdf.getPage(i).then(function (page) {
+              var v = page.getViewport({ scale: 1 });
+              return { w: v.width, h: v.height };
+            }));
+          }
+          return Promise.all(jobs).then(function (sizes) {
+            self.pageSizes = sizes;
           });
         });
       });
@@ -366,29 +374,58 @@
       this.modal.classList.toggle('cwflip-mode-slide', this.mode === 'spread-slide');
     },
 
-    // ----- internal: compute fit-to-stage page dimensions -----
-    _calcFit: function () {
+    // ----- internal: a "wide" page is one whose natural width > height. For
+    // brochures authored as already-merged 2-page spreads (e.g. CorelDRAW
+    // exports at 1224×792), each PDF page is itself a spread and should
+    // occupy the full stage in spread/flip modes — no right-pair partner.
+    _isWide: function (n) {
+      var p = this.pageSizes[n - 1];
+      return !!(p && p.w > p.h);
+    },
+
+    // ----- internal: which pages render in the current "view"
+    // Returns [leftN] or [leftN, rightN]. In single mode always one page.
+    // In spread modes: pair only when both pages are portrait (not wide).
+    _viewPages: function () {
+      var n = this.pageNum;
+      if (this.mode === 'single') return [n];
+      // First page often shown alone (cover) — keep that convention only when
+      // we're already on page 1 of a multi-page PDF, regardless of size.
+      var leftWide = this._isWide(n);
+      var hasNext = n + 1 <= this.totalPages;
+      var nextWide = hasNext && this._isWide(n + 1);
+      if (leftWide || !hasNext || nextWide) return [n];
+      return [n, n + 1];
+    },
+
+    // ----- internal: per-page fit calculation. Each page gets its own
+    // display dimensions based on its native aspect ratio so mixed-size
+    // PDFs don't get squished into the first page's aspect.
+    _calcFit: function (pages) {
       var stage = this._refs.stage;
       var stageRect = stage.getBoundingClientRect();
-      var topBar = 64, botBar = 80;
-      var availW = stageRect.width;
-      var availH = stageRect.height;
-      // Modal occupies full viewport, but stage is between bars
-      // (already accounted for since stage is flex:1 between bars)
-      var pageW = this.pageSize.w;
-      var pageH = this.pageSize.h;
-      var perPageMaxW;
-      if (this.mode === 'single') {
-        perPageMaxW = availW - 16;
+      var availW = stageRect.width - 16;
+      var availH = stageRect.height - 16;
+      var sizes = pages.map(function (n) { return this.pageSizes[n - 1]; }, this);
+      var totalNativeW, maxNativeH;
+      if (sizes.length === 1) {
+        totalNativeW = sizes[0].w;
+        maxNativeH = sizes[0].h;
       } else {
-        perPageMaxW = (availW - 32) / 2; // 2 pages + small gutter
+        // Two pages share the available width with a small gutter (16 px)
+        availW -= 16;
+        totalNativeW = sizes[0].w + sizes[1].w;
+        maxNativeH = Math.max(sizes[0].h, sizes[1].h);
       }
-      var perPageMaxH = availH - 16;
-      var fit = Math.min(perPageMaxW / pageW, perPageMaxH / pageH);
+      var scale = Math.min(availW / totalNativeW, availH / maxNativeH);
       return {
-        scale: fit,
-        displayW: Math.floor(pageW * fit),
-        displayH: Math.floor(pageH * fit)
+        scale: scale,
+        slots: sizes.map(function (s) {
+          return {
+            w: Math.floor(s.w * scale),
+            h: Math.floor(s.h * scale)
+          };
+        })
       };
     },
 
@@ -396,28 +433,23 @@
     _renderCurrent: function () {
       if (!this.pdf) return;
       var self = this;
-      var fit = this._calcFit();
-      // Re-render scale: scale up if zoomed past 150%, else 2× dpr for crispness
+      var pages = this._viewPages();
+      var fit = this._calcFit(pages);
+      // Re-render scale: scale up if zoomed past 150%, else 1.5× dpr for crispness
       var dpr = window.devicePixelRatio || 1;
       var renderScale = fit.scale * Math.max(dpr * 1.5, this.zoom * dpr);
       this.renderScale = renderScale;
 
-      var leftN = this.pageNum;
-      var rightN = (this.mode === 'single') ? null : (this.pageNum + 1 <= this.totalPages ? this.pageNum + 1 : null);
-
-      var jobs = [this._renderPage(leftN, renderScale)];
-      if (rightN) jobs.push(this._renderPage(rightN, renderScale));
+      var jobs = pages.map(function (n) { return self._renderPage(n, renderScale); });
 
       Promise.all(jobs).then(function (canvases) {
         if (self._destroyed) return;
-        // Hide loading
         if (self._refs.loading) self._refs.loading.style.display = 'none';
-        // Build spread DOM
-        self._buildSpread(canvases[0], canvases[1] || null, fit);
-        self._refs.cur.textContent = leftN + (rightN ? '–' + rightN : '');
+        self._buildSpread(canvases, fit);
+        self._refs.cur.textContent = pages.length === 2 ? (pages[0] + '–' + pages[1]) : String(pages[0]);
         self._announce();
         self._updateNavButtons();
-        if (typeof self.options.onPage === 'function') self.options.onPage(leftN, self.totalPages);
+        if (typeof self.options.onPage === 'function') self.options.onPage(pages[0], self.totalPages);
       }).catch(function (err) {
         if (!self._destroyed) self._showError(err);
       });
@@ -440,33 +472,26 @@
       });
     },
 
-    // ----- internal: build spread DOM from canvases -----
-    _buildSpread: function (leftCanvas, rightCanvas, fit) {
+    // ----- internal: build spread DOM from canvases. Each slot is sized to
+    // its own page's native aspect (from `fit.slots`), so a 1224×792 spread
+    // page won't be crushed into a 612×792 cover's box.
+    _buildSpread: function (canvases, fit) {
       var track = this._refs.track;
       track.innerHTML = '';
       track.style.transform = '';
       var spread = el('div', { 'class': 'cwflip-spread' });
-      // Left page
-      var pgL = el('div', { 'class': 'cwflip-page cwflip-page-left' });
-      pgL.style.width = fit.displayW + 'px';
-      pgL.style.height = fit.displayH + 'px';
-      var imgL = leftCanvas.cloneNode(false);
-      imgL.getContext('2d').drawImage(leftCanvas, 0, 0);
-      imgL.style.width = '100%';
-      imgL.style.height = '100%';
-      pgL.appendChild(imgL);
-      spread.appendChild(pgL);
-      // Right page (if any)
-      if (rightCanvas) {
-        var pgR = el('div', { 'class': 'cwflip-page cwflip-page-right' });
-        pgR.style.width = fit.displayW + 'px';
-        pgR.style.height = fit.displayH + 'px';
-        var imgR = rightCanvas.cloneNode(false);
-        imgR.getContext('2d').drawImage(rightCanvas, 0, 0);
-        imgR.style.width = '100%';
-        imgR.style.height = '100%';
-        pgR.appendChild(imgR);
-        spread.appendChild(pgR);
+      var classes = ['cwflip-page-left', 'cwflip-page-right'];
+      for (var i = 0; i < canvases.length; i++) {
+        var slot = fit.slots[i];
+        var pg = el('div', { 'class': 'cwflip-page ' + classes[i] });
+        pg.style.width = slot.w + 'px';
+        pg.style.height = slot.h + 'px';
+        var img = canvases[i].cloneNode(false);
+        img.getContext('2d').drawImage(canvases[i], 0, 0);
+        img.style.width = '100%';
+        img.style.height = '100%';
+        pg.appendChild(img);
+        spread.appendChild(pg);
       }
       track.appendChild(spread);
       this._applyZoomTransform();
@@ -496,15 +521,32 @@
 
     _updateNavButtons: function () {
       this._refs.prev.disabled = this.pageNum <= 1;
-      var step = (this.mode === 'single') ? 1 : 2;
-      this._refs.next.disabled = this.pageNum + step - 1 >= this.totalPages;
+      var pages = this._viewPages();
+      this._refs.next.disabled = pages[pages.length - 1] >= this.totalPages;
       this._refs.zout.disabled = this.zoom <= 0.5;
       this._refs.zin.disabled = this.zoom >= 3.0;
     },
 
     _navigate: function (dir) {
       if (this.flipping) return;
-      var step = (this.mode === 'single') ? 1 : 2;
+      // Step depends on the current view: paired spreads advance by 2,
+      // singles advance by 1. Going back, we need to know whether the
+      // previous view was paired (look at pageNum-1 and pageNum-2).
+      var step = 1;
+      if (dir > 0) {
+        step = this._viewPages().length;
+      } else {
+        // Walking backwards: if pageNum-1 exists and pageNum-2 also exists
+        // and both are non-wide, the previous view was paired (step 2).
+        var prevN = this.pageNum - 1;
+        var prevPrevN = this.pageNum - 2;
+        if (this.mode !== 'single'
+            && prevPrevN >= 1
+            && !this._isWide(prevN)
+            && !this._isWide(prevPrevN)) {
+          step = 2;
+        }
+      }
       var nxt = this.pageNum + dir * step;
       if (nxt < 1 || nxt > this.totalPages) return;
       this.pageNum = nxt;

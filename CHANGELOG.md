@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.1 — 2026-04-27
+
+**Fix: per-page sizing for PDFs with mixed page dimensions.**
+
+Previously the plugin captured only page 1's natural dimensions and forced every subsequent page into that aspect ratio. Brochures authored as already-merged 2-page spreads (e.g. CorelDRAW exports where page 1 = 612×792 portrait cover but pages 2-N = 1224×792 landscape spreads) had inner pages crushed by 50% horizontally.
+
+- Plugin now captures every page's native viewport on load
+- Each rendered slot is sized to its own page's aspect ratio (no global fit)
+- In spread/flip and spread/slide modes, a "wide" PDF page (w > h) is treated as a full-width single view, not paired
+- Navigation step adapts to the current view (1 or 2) so prev/next stay in sync across mixed-size documents
+
 ## v1.0.0 — 2026-04-27
 
 Initial release.
