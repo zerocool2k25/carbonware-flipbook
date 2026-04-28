@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carbonware Flipbook — Demo</title>
+<link rel="stylesheet" href="../src/carbonware-flipbook.css">
+<style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 3rem auto; padding: 0 1.5rem; line-height: 1.6; color: #1f2937; }
+    h1 { font-size: 2.4rem; font-weight: 800; margin: 0 0 1rem; letter-spacing: -0.02em; }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.6rem; }
+    p { color: #4b5563; }
+    pre { background: #1f2937; color: #e5e7eb; padding: 1.2rem; border-radius: 10px; overflow-x: auto; font-size: 0.85rem; }
+    button.demo-btn {
+        display: inline-flex; align-items: center; gap: 0.55rem;
+        padding: 0.85rem 1.6rem;
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+        color: #2D1B00; font-weight: 800; font-size: 1rem;
+        border: 0; border-radius: 12px; cursor: pointer;
+        box-shadow: 0 8px 24px rgba(245,158,11,0.35);
+        transition: transform 0.2s, box-shadow 0.2s;
+        font-family: inherit;
+    }
+    button.demo-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 32px rgba(245,158,11,0.45); }
+    code { background: #f3f4f6; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; background: #ecfeff; color: #0369a1; border-radius: 20px; font-size: 0.78rem; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<h1>Carbonware Flipbook</h1>
+<p><span class="badge">v1.0.0</span> &nbsp; A polished, cross-device PDF flipbook plugin. Vanilla JS, no framework, ~25 KB.</p>
+
+<h2>Demo</h2>
+<p>Click below to open the sample PDF:</p>
+<button type="button" class="demo-btn"
+        data-cwflip-pdf="sample.pdf"
+        data-cwflip-title="Carbonware Flipbook — Sample PDF"
+        data-cwflip-pdfworker="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.mjs">
+    📖 Open sample PDF
+</button>
+
+<h2>Auto-init usage</h2>
+<pre>&lt;link rel="stylesheet" href="cw-flipbook/src/carbonware-flipbook.css"&gt;
+&lt;script src="cw-flipbook/src/carbonware-flipbook.js" defer&gt;&lt;/script&gt;
+
+&lt;button type="button"
+        data-cwflip-pdf="/docs/brochure.pdf"
+        data-cwflip-title="My Brochure"
+        data-cwflip-pdfworker="/path/to/pdfjs/build/pdf.worker.mjs"&gt;
+    Read the brochure
+&lt;/button&gt;</pre>
+
+<h2>Programmatic usage</h2>
+<pre>CWFlipbook.open({
+    url: '/docs/brochure.pdf',
+    title: 'My Brochure',
+    workerSrc: '/path/to/pdfjs/build/pdf.worker.mjs',
+    accent: '#0d9488',
+    onPage: (n, total) =&gt; console.log(`Page ${n}/${total}`),
+    onClose: () =&gt; console.log('closed')
+});</pre>
+
+<h2>Modes (auto-picked)</h2>
+<ul>
+    <li><strong>≥ 1024 px:</strong> two-page spread with flip animation</li>
+    <li><strong>600-1023 px:</strong> two-page spread with slide transition</li>
+    <li><strong>&lt; 600 px:</strong> single page, swipe to navigate</li>
+</ul>
+
+<h2>Gestures</h2>
+<ul>
+    <li>Swipe left/right → next/previous page</li>
+    <li>Pinch with two fingers → zoom (re-renders past 150% for crisp text)</li>
+    <li>Tap left/right edge → previous/next</li>
+    <li>Double tap → toggle fit ↔ zoomed</li>
+</ul>
+
+<h2>Keyboard shortcuts</h2>
+<ul>
+    <li><code>←</code> / <code>→</code> — turn pages</li>
+    <li><code>+</code> / <code>−</code> — zoom in/out</li>
+    <li><code>0</code> — fit to page</li>
+    <li><code>F</code> — fullscreen</li>
+    <li><code>Esc</code> — close</li>
+</ul>
+
+<script src="../src/carbonware-flipbook.js" defer></script>
+</body>
+</html>

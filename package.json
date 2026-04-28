@@ -1,0 +1,41 @@
+{
+  "name": "carbonware-flipbook",
+  "version": "1.0.0",
+  "description": "A polished, cross-device PDF flipbook plugin. Vanilla JS + CSS, built on PDF.js.",
+  "main": "src/carbonware-flipbook.js",
+  "style": "src/carbonware-flipbook.css",
+  "files": [
+    "src/",
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "demo": "live-server demo --no-browser --port=8090"
+  },
+  "keywords": [
+    "pdf",
+    "flipbook",
+    "viewer",
+    "page-flip",
+    "carbonware",
+    "vanilla-js"
+  ],
+  "author": "Gavindra Nauth <gavindra@carbonware.ca>",
+  "license": "MIT",
+  "homepage": "https://carbonware.ca",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zerocool2k25/carbonware-flipbook.git"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": ">=3.0.0"
+  },
+  "browserslist": [
+    "Chrome >= 90",
+    "Firefox >= 90",
+    "Safari >= 15",
+    "iOS >= 14",
+    "Edge >= 90"
+  ]
+}
