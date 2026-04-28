@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.0.2 — 2026-04-27
+
+**Polished page-flip animation.**
+
+The previous build used a slide-out + fade-in for transitions. v1.0.2 replaces it with a real 3D page-turn:
+
+- In spread-flip mode (≥ 1024 px), the leading page rotates around the spine (rotateY 0 → ±180°), revealing the next page on its back face. Underneath, the destination spread is laid in before the rotation, so the reveal feels seamless.
+- Slide-mode (600–1023 px) and single-mode (< 600 px) get a clean horizontal slide between spreads instead of the old fade.
+- Subtle shadow gradient on the flipping page during rotation gives a sense of paper bending.
+- Reduced-motion preference still drops to instant page swap.
+
 ## v1.0.1 — 2026-04-27
 
 **Fix: per-page sizing for PDFs with mixed page dimensions.**

@@ -450,26 +450,66 @@
         self._announce();
         self._updateNavButtons();
         if (typeof self.options.onPage === 'function') self.options.onPage(pages[0], self.totalPages);
+        // Prefetch the next view so the upcoming flip starts instantly.
+        // Uses requestIdleCallback when available so it doesn't compete
+        // with the just-completed render's frame budget.
+        self._prefetchAdjacent(renderScale);
       }).catch(function (err) {
         if (!self._destroyed) self._showError(err);
       });
     },
 
-    // ----- internal: render a single page to canvas (cached) -----
+    // ----- internal: prefetch pages on either side of the current view
+    // at the same scale. Renders happen in the background; results land
+    // in the cache and are picked up by `_renderPage` immediately.
+    _prefetchAdjacent: function (scale) {
+      var self = this;
+      var pages = this._viewPages();
+      var lastVisible = pages[pages.length - 1];
+      // Forward: peek at the next view's pages
+      var forwardN = lastVisible + 1;
+      // Backward: peek at the previous view's last page
+      var backwardN = pages[0] - 1;
+      var schedule = window.requestIdleCallback
+        ? function (fn) { return window.requestIdleCallback(fn, { timeout: 800 }); }
+        : function (fn) { return setTimeout(fn, 100); };
+      schedule(function () {
+        if (self._destroyed) return;
+        if (forwardN <= self.totalPages) self._renderPage(forwardN, scale).catch(function () {});
+        if (backwardN >= 1) self._renderPage(backwardN, scale).catch(function () {});
+        // Also prefetch the partner of forwardN if it'd be paired in a spread view
+        if (self.mode !== 'single' && forwardN + 1 <= self.totalPages
+            && !self._isWide(forwardN) && !self._isWide(forwardN + 1)) {
+          self._renderPage(forwardN + 1, scale).catch(function () {});
+        }
+      });
+    },
+
+    // ----- internal: render a single page to canvas (cached + deduped).
+    // Two callers (e.g. user click + background prefetch) asking for the
+    // same page+scale share one render Promise — PDF.js rejects
+    // concurrent render() calls on the same page, so deduping is
+    // mandatory, not an optimization.
     _renderPage: function (n, scale) {
       var key = n + ':' + scale.toFixed(3);
       if (this.cache[key]) return Promise.resolve(this.cache[key]);
+      this._inflight = this._inflight || {};
+      if (this._inflight[key]) return this._inflight[key];
       var self = this;
-      return this.pdf.getPage(n).then(function (page) {
+      var p = this.pdf.getPage(n).then(function (page) {
         var v = page.getViewport({ scale: scale });
         var canvas = document.createElement('canvas');
         canvas.width = Math.round(v.width);
         canvas.height = Math.round(v.height);
         return page.render({ canvasContext: canvas.getContext('2d'), viewport: v }).promise.then(function () {
           self.cache[key] = canvas;
+          delete self._inflight[key];
           return canvas;
         });
       });
+      p.catch(function () { delete self._inflight[key]; });
+      this._inflight[key] = p;
+      return p;
     },
 
     // ----- internal: build spread DOM from canvases. Each slot is sized to
@@ -536,8 +576,6 @@
       if (dir > 0) {
         step = this._viewPages().length;
       } else {
-        // Walking backwards: if pageNum-1 exists and pageNum-2 also exists
-        // and both are non-wide, the previous view was paired (step 2).
         var prevN = this.pageNum - 1;
         var prevPrevN = this.pageNum - 2;
         if (this.mode !== 'single'
@@ -549,37 +587,201 @@
       }
       var nxt = this.pageNum + dir * step;
       if (nxt < 1 || nxt > this.totalPages) return;
+
+      // Capture the current canvases for the flip animation BEFORE we
+      // re-render. Cloning is cheap and lets the new render happen in
+      // parallel with the animation.
+      var oldSpread = this._refs.track.querySelector('.cwflip-spread');
+      var oldCanvases = oldSpread
+        ? Array.from(oldSpread.querySelectorAll('canvas')).map(this._cloneCanvas)
+        : [];
+      var oldSlots = oldSpread
+        ? Array.from(oldSpread.querySelectorAll('.cwflip-page')).map(function (p) {
+            var r = p.getBoundingClientRect();
+            return { w: Math.round(r.width), h: Math.round(r.height), left: r.left, top: r.top };
+          })
+        : [];
+
       this.pageNum = nxt;
-      // 3D flip on desktop
-      if (this.mode === 'spread-flip' && !reducedMotion()) {
-        this._flipAnimate(dir).then(this._renderCurrent.bind(this));
+
+      if (oldCanvases.length && !reducedMotion()
+          && (this.mode === 'spread-flip' || this.mode === 'spread-slide' || this.mode === 'single')) {
+        this._renderAndAnimate(dir, oldCanvases, oldSlots);
       } else {
         this._renderCurrent();
       }
     },
 
-    // Simple slide-out / fade-in for the flip "animation". A full 3D
-    // page-curl is a future enhancement; this looks clean and avoids
-    // the page-flip library's mobile sizing bugs.
-    _flipAnimate: function (dir) {
+    // ----- internal: clone a canvas (snapshot) -----
+    _cloneCanvas: function (src) {
+      var c = document.createElement('canvas');
+      c.width = src.width;
+      c.height = src.height;
+      c.getContext('2d').drawImage(src, 0, 0);
+      return c;
+    },
+
+    // ----- internal: render the destination view, then animate the
+    // transition from the old view (oldCanvases) to it. The animation
+    // form depends on mode: 3D page-flip in spread-flip, horizontal
+    // slide in spread-slide and single, opacity crossfade if either
+    // pre-render fails or reduced-motion fires mid-transition.
+    _renderAndAnimate: function (dir, oldCanvases, oldSlots) {
       var self = this;
-      this.flipping = true;
-      var track = this._refs.track;
-      var dist = Math.round(track.getBoundingClientRect().width * 0.5) * (dir > 0 ? -1 : 1);
-      track.style.transition = 'transform var(--cwflip-flip-time) cubic-bezier(0.42,0,0.4,1), opacity 0.4s ease';
-      track.style.transform = 'translate3d(' + dist + 'px,0,0) scale(' + this.zoom + ')';
-      track.style.opacity = '0';
-      return new Promise(function (resolve) {
-        setTimeout(function () {
-          track.style.transition = '';
-          self.flipping = false;
-          resolve();
-        }, 380);
-      }).then(function () {
-        // After render, fade the new spread in
-        track.style.opacity = '1';
-        track.style.transform = 'scale(' + self.zoom + ')';
+      self.flipping = true;
+      var newPages = this._viewPages();
+      var fit = this._calcFit(newPages);
+      var dpr = window.devicePixelRatio || 1;
+      var renderScale = fit.scale * Math.max(dpr * 1.5, this.zoom * dpr);
+      this.renderScale = renderScale;
+      var jobs = newPages.map(function (n) { return self._renderPage(n, renderScale); });
+      Promise.all(jobs).then(function (newCanvases) {
+        if (self._destroyed) return;
+        if (self.mode === 'spread-flip') {
+          self._animatePageFlip(dir, oldCanvases, oldSlots, newCanvases, fit, newPages);
+        } else {
+          self._animateSlide(dir, newCanvases, fit, newPages);
+        }
+      }).catch(function (err) {
+        self.flipping = false;
+        if (!self._destroyed) self._showError(err);
       });
+    },
+
+    // ----- internal: 3D page-flip animation -----
+    // Forward (dir>0): the page on the right (or only page in a single
+    // view) peels off about its LEFT edge (the spine) — front face is
+    // the old page, back face is the leading new page. Underneath, the
+    // new spread is laid in BEFORE the animation starts; the flipper
+    // sits on top of it during rotation.
+    _animatePageFlip: function (dir, oldCanvases, oldSlots, newCanvases, fit, newPages) {
+      var self = this;
+      var track = this._refs.track;
+
+      // Lay in the destination spread first (it sits underneath the flipper)
+      this._buildSpread(newCanvases, fit);
+
+      // Identify which old slot is "flipping": rightmost on next, leftmost on prev
+      var flipFromIdx = (dir > 0) ? (oldCanvases.length - 1) : 0;
+      var flipFrom = oldCanvases[flipFromIdx];
+      var flipFromSlot = oldSlots[flipFromIdx];
+      // The corresponding new face is the new spread's mirror end:
+      // forward → first page of new view (lands on the LEFT side)
+      // backward → last page of new view (lands on the RIGHT side)
+      var flipToIdx = (dir > 0) ? 0 : (newCanvases.length - 1);
+      var flipTo = newCanvases[flipToIdx];
+      var flipToSlot = fit.slots[flipToIdx];
+
+      // Position the flipper over the old slot's location, sized to its dims
+      var trackRect = track.getBoundingClientRect();
+      var flipper = el('div', { 'class': 'cwflip-flip' });
+      flipper.style.left = (flipFromSlot.left - trackRect.left) + 'px';
+      flipper.style.top = (flipFromSlot.top - trackRect.top) + 'px';
+      flipper.style.width = flipFromSlot.w + 'px';
+      flipper.style.height = flipFromSlot.h + 'px';
+      flipper.style.transformOrigin = (dir > 0 ? 'left' : 'right') + ' center';
+      flipper.style.transform = 'rotateY(0deg)';
+      flipper.style.boxShadow = 'var(--cwflip-page-shadow)';
+
+      // Front face: old (flipping) page
+      var front = el('div', { 'class': 'cwflip-flip-face cwflip-flip-front' });
+      var frontImg = flipFrom.cloneNode(false);
+      frontImg.getContext('2d').drawImage(flipFrom, 0, 0);
+      front.appendChild(frontImg);
+      flipper.appendChild(front);
+
+      // Back face: new page that will land in the opposite slot. We size
+      // the back face element to match the destination slot so its
+      // aspect ratio matches when revealed (matters for mixed-size PDFs).
+      var back = el('div', { 'class': 'cwflip-flip-face cwflip-flip-back' });
+      var backImg = flipTo.cloneNode(false);
+      backImg.getContext('2d').drawImage(flipTo, 0, 0);
+      back.appendChild(backImg);
+      // Stretch back to the same flipper box (CSS already inset:0). If
+      // the destination slot has different aspect, the image will scale
+      // to fill — for our spread case that's the correct behavior.
+      flipper.appendChild(back);
+
+      track.appendChild(flipper);
+
+      // Force layout, then start the rotation
+      void flipper.offsetWidth;
+      var dur = parseInt(getComputedStyle(this.modal).getPropertyValue('--cwflip-flip-time'), 10) || 700;
+      flipper.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.42, 0, 0.4, 1), box-shadow ' + dur + 'ms ease';
+      flipper.style.boxShadow = '-12px 18px 36px rgba(0,0,0,0.5), 0 24px 60px rgba(0,0,0,0.7)';
+      flipper.style.transform = 'rotateY(' + (dir > 0 ? -180 : 180) + 'deg)';
+      flipper.classList.add('cwflip-flipping');
+
+      setTimeout(function () {
+        if (self._destroyed) return;
+        if (flipper.parentNode) flipper.parentNode.removeChild(flipper);
+        self._refs.cur.textContent = newPages.length === 2 ? newPages.join('–') : String(newPages[0]);
+        self._announce();
+        self._updateNavButtons();
+        if (typeof self.options.onPage === 'function') self.options.onPage(newPages[0], self.totalPages);
+        self.flipping = false;
+      }, dur + 30);
+    },
+
+    // ----- internal: horizontal slide (mobile + tablet) -----
+    _animateSlide: function (dir, newCanvases, fit, newPages) {
+      var self = this;
+      var track = this._refs.track;
+      var oldSpread = track.querySelector('.cwflip-spread');
+      var dur = parseInt(getComputedStyle(this.modal).getPropertyValue('--cwflip-slide-time'), 10) || 360;
+
+      // Build the new spread but keep it positioned just off-screen on
+      // the leading edge so it can slide in.
+      var width = oldSpread ? oldSpread.getBoundingClientRect().width : track.getBoundingClientRect().width;
+      var oldShift = (dir > 0 ? -1 : 1) * width;
+      var newShift = (dir > 0 ? 1 : -1) * width;
+
+      // Add the new spread alongside the old (positioned absolutely, off-screen)
+      var holder = el('div', { 'class': 'cwflip-slide-holder' });
+      holder.style.position = 'absolute';
+      holder.style.top = '0';
+      holder.style.left = '0';
+      holder.style.width = '100%';
+      holder.style.height = '100%';
+      holder.style.display = 'flex';
+      holder.style.alignItems = 'center';
+      holder.style.justifyContent = 'center';
+      holder.style.transform = 'translate3d(' + newShift + 'px, 0, 0)';
+      holder.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.22, 1, 0.36, 1)';
+      // Build new spread inside holder
+      var newSpread = el('div', { 'class': 'cwflip-spread' });
+      var classes = ['cwflip-page-left', 'cwflip-page-right'];
+      for (var i = 0; i < newCanvases.length; i++) {
+        var slot = fit.slots[i];
+        var pg = el('div', { 'class': 'cwflip-page ' + classes[i] });
+        pg.style.width = slot.w + 'px';
+        pg.style.height = slot.h + 'px';
+        var img = newCanvases[i].cloneNode(false);
+        img.getContext('2d').drawImage(newCanvases[i], 0, 0);
+        pg.appendChild(img);
+        newSpread.appendChild(pg);
+      }
+      holder.appendChild(newSpread);
+      track.appendChild(holder);
+
+      if (oldSpread) {
+        oldSpread.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.22, 1, 0.36, 1)';
+      }
+
+      void holder.offsetWidth;
+      if (oldSpread) oldSpread.style.transform = 'translate3d(' + oldShift + 'px, 0, 0)';
+      holder.style.transform = 'translate3d(0, 0, 0)';
+
+      setTimeout(function () {
+        if (self._destroyed) return;
+        // Replace track contents with the final new spread (clean state)
+        self._buildSpread(newCanvases, fit);
+        self._refs.cur.textContent = newPages.length === 2 ? newPages.join('–') : String(newPages[0]);
+        self._announce();
+        self._updateNavButtons();
+        if (typeof self.options.onPage === 'function') self.options.onPage(newPages[0], self.totalPages);
+        self.flipping = false;
+      }, dur + 20);
     },
 
     // ----- internal: gesture handling -----

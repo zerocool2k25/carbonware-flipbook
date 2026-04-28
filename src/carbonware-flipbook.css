@@ -200,11 +200,15 @@
     -webkit-perspective-origin: center center;
 }
 
-/* The track holds the spread; transforms to navigate */
+/* The track holds the spread; transforms to navigate. preserve-3d so
+   any flipping page renders properly in 3D space relative to the spread. */
 .cwflip-track {
     position: relative;
     transition: transform var(--cwflip-slide-time) cubic-bezier(0.22, 1, 0.36, 1);
     will-change: transform;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+    overflow: visible;
 }
 .cwflip-track.cwflip-grab { cursor: grab; }
 .cwflip-track.cwflip-grabbing { cursor: grabbing; }
@@ -238,15 +242,16 @@
     box-shadow: 1px 0 4px rgba(0, 0, 0, 0.18);
 }
 
-/* 3D flip layer (desktop only) */
+/* 3D flip layer — overlay used during page transitions.
+   Sized + positioned in JS to match the page being flipped. */
 .cwflip-flip {
     position: absolute;
-    top: 0;
     transform-style: preserve-3d;
     -webkit-transform-style: preserve-3d;
-    transition: transform var(--cwflip-flip-time) cubic-bezier(0.42, 0, 0.4, 1);
-    will-change: transform;
+    will-change: transform, box-shadow;
     pointer-events: none;
+    z-index: 5;
+    border-radius: 2px;
 }
 .cwflip-flip-face {
     position: absolute;
@@ -254,8 +259,29 @@
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
     background: var(--cwflip-page-bg);
+    overflow: hidden;
+    border-radius: inherit;
+}
+.cwflip-flip-face canvas,
+.cwflip-flip-face img {
+    display: block;
+    width: 100%;
+    height: 100%;
 }
 .cwflip-flip-back { transform: rotateY(180deg); }
+/* Subtle shadow gradient on the flipping page — gives a sense of paper
+   bending. Layered over the canvas using mix-blend-mode for darkness. */
+.cwflip-flip-front::after,
+.cwflip-flip-back::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(90deg, rgba(0,0,0,0.18), rgba(0,0,0,0) 25%, rgba(0,0,0,0) 75%, rgba(0,0,0,0.18));
+    opacity: 0;
+    transition: opacity var(--cwflip-flip-time) ease;
+}
+.cwflip-flip.cwflip-flipping .cwflip-flip-face::after { opacity: 1; }
 
 /* Single-page mode (mobile portrait) */
 .cwflip-mode-single .cwflip-page-right,
