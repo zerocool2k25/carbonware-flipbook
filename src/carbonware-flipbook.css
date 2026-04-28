@@ -269,19 +269,54 @@
     height: 100%;
 }
 .cwflip-flip-back { transform: rotateY(180deg); }
-/* Subtle shadow gradient on the flipping page — gives a sense of paper
-   bending. Layered over the canvas using mix-blend-mode for darkness. */
-.cwflip-flip-front::after,
+
+/* Dynamic shadow gradients along the spine edge — peak at midflip when
+   the page is bent edge-on, fade at the rest. Two layers per face: one
+   directional gradient on the inside (the side facing the spine), and a
+   thin highlight along the outer edge. The gradient is shaped on the
+   front face as a darkening band sweeping from the spine outward, and
+   mirrored on the back face. The animation matches the flip duration. */
+.cwflip-flip-face::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background: linear-gradient(90deg,
+        rgba(0,0,0,0.45) 0%,
+        rgba(0,0,0,0.18) 12%,
+        rgba(0,0,0,0) 38%,
+        rgba(0,0,0,0) 100%);
+    opacity: 0;
+}
+.cwflip-flip-back::before {
+    /* mirror the gradient on the back face so the dark side stays at the spine */
+    background: linear-gradient(270deg,
+        rgba(0,0,0,0.45) 0%,
+        rgba(0,0,0,0.18) 12%,
+        rgba(0,0,0,0) 38%,
+        rgba(0,0,0,0) 100%);
+}
+.cwflip-flip.cwflip-flipping .cwflip-flip-face::before {
+    animation: cwflip-shadow-pulse var(--cwflip-flip-time) cubic-bezier(0.42, 0, 0.4, 1) forwards;
+}
+@keyframes cwflip-shadow-pulse {
+    0%   { opacity: 0; }
+    35%  { opacity: 0.95; }
+    65%  { opacity: 0.95; }
+    100% { opacity: 0; }
+}
+
+/* Inset shadow on the back face — simulates the back of paper being
+   slightly darker than the front (real books have this) */
 .cwflip-flip-back::after {
     content: '';
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: linear-gradient(90deg, rgba(0,0,0,0.18), rgba(0,0,0,0) 25%, rgba(0,0,0,0) 75%, rgba(0,0,0,0.18));
-    opacity: 0;
-    transition: opacity var(--cwflip-flip-time) ease;
+    border-radius: inherit;
+    box-shadow: inset 0 0 60px rgba(0,0,0,0.08);
 }
-.cwflip-flip.cwflip-flipping .cwflip-flip-face::after { opacity: 1; }
 
 /* Single-page mode (mobile portrait) */
 .cwflip-mode-single .cwflip-page-right,

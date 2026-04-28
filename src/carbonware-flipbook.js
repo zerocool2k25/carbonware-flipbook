@@ -663,10 +663,16 @@
       var jobs = newPages.map(function (n) { return self._renderPage(n, renderScale); });
       Promise.all(jobs).then(function (newCanvases) {
         if (self._destroyed) return;
-        if (self.mode === 'spread-flip') {
+        // 3D page-flip is only convincing for paired views — both sides
+        // of a real book spread visible. For single-page views (mobile,
+        // tablet portrait, OR brochures whose inner pages are
+        // designed-as-spread wide pages) a horizontal slide reads as
+        // turning a magazine page rather than a card flapping off-edge.
+        var isPaired = oldCanvases.length === 2 && newCanvases.length === 2;
+        if (self.mode === 'spread-flip' && isPaired) {
           self._animatePageFlip(dir, oldCanvases, oldSlots, newCanvases, fit, newPages);
         } else {
-          self._animateSlide(dir, newCanvases, fit, newPages);
+          self._animateSlide(dir, oldCanvases, oldSlots, newCanvases, fit, newPages);
         }
       }).catch(function (err) {
         self.flipping = false;
@@ -733,8 +739,11 @@
       // Force layout, then start the rotation
       void flipper.offsetWidth;
       var dur = parseInt(getComputedStyle(this.modal).getPropertyValue('--cwflip-flip-time'), 10) || 700;
-      flipper.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.42, 0, 0.4, 1), box-shadow ' + dur + 'ms ease';
-      flipper.style.boxShadow = '-12px 18px 36px rgba(0,0,0,0.5), 0 24px 60px rgba(0,0,0,0.7)';
+      // Easing: slight asymmetric curve — page accelerates off rest, glides
+      // through the midpoint, lands gently. Matches how a real page falls.
+      var ease = 'cubic-bezier(0.45, 0.05, 0.25, 1)';
+      flipper.style.transition = 'transform ' + dur + 'ms ' + ease + ', box-shadow ' + dur + 'ms ease';
+      flipper.style.boxShadow = '-18px 24px 48px rgba(0,0,0,0.55), 0 32px 80px rgba(0,0,0,0.5)';
       flipper.style.transform = 'rotateY(' + (dir > 0 ? -180 : 180) + 'deg)';
       flipper.classList.add('cwflip-flipping');
 
@@ -749,32 +758,44 @@
       }, dur + 30);
     },
 
-    // ----- internal: horizontal slide (mobile + tablet) -----
-    _animateSlide: function (dir, newCanvases, fit, newPages) {
+    // ----- internal: horizontal page slide with 3D depth tilt.
+    // Used for single-page views (mobile single mode, tablet slide mode,
+    // AND any single-page spread on desktop — e.g. a wide-page brochure).
+    // The outgoing page slides off-edge while tilting slightly back; the
+    // incoming page slides in from the opposite edge tilting forward to
+    // settle flat. Reads as turning a magazine page rather than a flat
+    // crossfade.
+    _animateSlide: function (dir, oldCanvases, oldSlots, newCanvases, fit, newPages) {
       var self = this;
       var track = this._refs.track;
       var oldSpread = track.querySelector('.cwflip-spread');
+      var stageRect = this._refs.stage.getBoundingClientRect();
+      // Duration: a touch longer than pure slide to let the tilt breathe
       var dur = parseInt(getComputedStyle(this.modal).getPropertyValue('--cwflip-slide-time'), 10) || 360;
+      dur = Math.round(dur * 1.35);
 
-      // Build the new spread but keep it positioned just off-screen on
-      // the leading edge so it can slide in.
-      var width = oldSpread ? oldSpread.getBoundingClientRect().width : track.getBoundingClientRect().width;
-      var oldShift = (dir > 0 ? -1 : 1) * width;
-      var newShift = (dir > 0 ? 1 : -1) * width;
+      // Slide distance = full stage width so the page exits cleanly
+      var dist = stageRect.width;
+      var oldShift = (dir > 0 ? -1 : 1) * dist;
+      var newShift = (dir > 0 ? 1 : -1) * dist;
+      // Slight tilt for depth (the leaving page tilts away from camera,
+      // the incoming page enters tilted-in and rotates flat)
+      var oldTilt = (dir > 0 ? 1 : -1) * 14;
+      var newTilt = (dir > 0 ? -1 : 1) * 14;
 
-      // Add the new spread alongside the old (positioned absolutely, off-screen)
+      // Holder for the incoming spread, positioned off-screen on entry side
       var holder = el('div', { 'class': 'cwflip-slide-holder' });
       holder.style.position = 'absolute';
-      holder.style.top = '0';
-      holder.style.left = '0';
-      holder.style.width = '100%';
-      holder.style.height = '100%';
+      holder.style.inset = '0';
       holder.style.display = 'flex';
       holder.style.alignItems = 'center';
       holder.style.justifyContent = 'center';
-      holder.style.transform = 'translate3d(' + newShift + 'px, 0, 0)';
-      holder.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.22, 1, 0.36, 1)';
-      // Build new spread inside holder
+      holder.style.transformStyle = 'preserve-3d';
+      holder.style.transformOrigin = 'center center';
+      holder.style.transform = 'translate3d(' + newShift + 'px, 0, 0) rotateY(' + newTilt + 'deg)';
+      holder.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.32, 0.72, 0, 1)';
+      holder.style.willChange = 'transform';
+
       var newSpread = el('div', { 'class': 'cwflip-spread' });
       var classes = ['cwflip-page-left', 'cwflip-page-right'];
       for (var i = 0; i < newCanvases.length; i++) {
@@ -791,16 +812,19 @@
       track.appendChild(holder);
 
       if (oldSpread) {
-        oldSpread.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.22, 1, 0.36, 1)';
+        oldSpread.style.transformStyle = 'preserve-3d';
+        oldSpread.style.transformOrigin = 'center center';
+        oldSpread.style.transition = 'transform ' + dur + 'ms cubic-bezier(0.32, 0.72, 0, 1)';
+        oldSpread.style.willChange = 'transform';
       }
 
+      // Force layout, then trigger transitions
       void holder.offsetWidth;
-      if (oldSpread) oldSpread.style.transform = 'translate3d(' + oldShift + 'px, 0, 0)';
-      holder.style.transform = 'translate3d(0, 0, 0)';
+      if (oldSpread) oldSpread.style.transform = 'translate3d(' + oldShift + 'px, 0, 0) rotateY(' + oldTilt + 'deg)';
+      holder.style.transform = 'translate3d(0, 0, 0) rotateY(0deg)';
 
       setTimeout(function () {
         if (self._destroyed) return;
-        // Replace track contents with the final new spread (clean state)
         self._buildSpread(newCanvases, fit);
         self._refs.cur.textContent = newPages.length === 2 ? newPages.join('–') : String(newPages[0]);
         self._announce();

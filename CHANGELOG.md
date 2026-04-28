@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.4 — 2026-04-27
+
+**Animation polish pass.**
+
+- **Smarter transition strategy** — 3D page-flip is now reserved for paired (left + right) views where it actually reads as a book page turning. Single-page views (mobile, tablet portrait, OR brochures whose inner pages are designed-as-spread wide pages) get a horizontal slide-with-3D-tilt: the leaving page slides off tilting away from camera, the incoming page slides in tilted-in and rotates flat. Reads as turning a magazine page rather than a card flapping off-edge.
+- **Dynamic shadow pulse** — for true 3D flips, a directional gradient sweeps the page during rotation (peaks at midflip when paper is bent edge-on). CSS keyframe animation, no JS overhead.
+- **Refined easing** — `cubic-bezier(0.45, 0.05, 0.25, 1)` for flips and `cubic-bezier(0.32, 0.72, 0, 1)` for slides — pages accelerate off rest, glide through the midpoint, land gently.
+- **Back face inset shadow** — simulates page thickness when the back of a flipping page is revealed.
+- Thanks to research surveying StPageFlip / flipbook-vue / DearFlip patterns; concrete improvements borrowed: dynamic shadow gradient (StPageFlip), per-page rotation easing (flipbook-vue).
+
 ## v1.0.3 — 2026-04-27
 
 **Mouse drag-to-pan when zoomed (desktop).**
