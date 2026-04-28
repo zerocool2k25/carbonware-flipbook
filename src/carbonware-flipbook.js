@@ -106,6 +106,8 @@
     this.totalPages = 0;
     this.pageNum = 1;       // 1-indexed
     this.zoom = 1;          // display scale (1 = fit-to-stage)
+    this.panX = 0;          // pan offset (px) — only meaningful when zoom > 1
+    this.panY = 0;
     this.renderScale = 1;   // last canvas-render scale (re-renders past 1.5)
     this.cache = {};        // pageNum:scale → canvas
     this.mode = 'spread-flip'; // 'spread-flip' | 'spread-slide' | 'single'
@@ -184,6 +186,8 @@
       if (newZ === this.zoom) return;
       var crossedHi = (newZ > 1.5 && this.zoom <= 1.5);
       var crossedLo = (newZ <= 1.5 && this.zoom > 1.5);
+      // Reset pan when returning to fit; otherwise keep it (re-clamped)
+      if (newZ <= 1) { this.panX = 0; this.panY = 0; }
       this.zoom = newZ;
       this._showZoomBadge();
       // Re-render at higher resolution past 150% so text stays sharp
@@ -537,11 +541,33 @@
       this._applyZoomTransform();
     },
 
-    // ----- internal: apply zoom + center via transform -----
+    // ----- internal: apply zoom + pan via transform -----
     _applyZoomTransform: function () {
       var track = this._refs.track;
-      track.style.transform = 'scale(' + this.zoom + ')';
+      // Clamp pan so the page can't be dragged completely off-stage.
+      // Max pan in each axis = (zoomed size − stage size) / 2.
+      var stageRect = this._refs.stage ? this._refs.stage.getBoundingClientRect() : null;
+      var trackRect = track.getBoundingClientRect();
+      if (stageRect && this.zoom > 1) {
+        // trackRect already reflects the previous transform; compute the
+        // *intrinsic* (untransformed) size from the spread element.
+        var spread = track.querySelector('.cwflip-spread');
+        var sw = spread ? spread.getBoundingClientRect().width / Math.max(this.zoom, 0.01) : 0;
+        var sh = spread ? spread.getBoundingClientRect().height / Math.max(this.zoom, 0.01) : 0;
+        var maxX = Math.max(0, (sw * this.zoom - stageRect.width) / 2);
+        var maxY = Math.max(0, (sh * this.zoom - stageRect.height) / 2);
+        this.panX = clamp(this.panX, -maxX, maxX);
+        this.panY = clamp(this.panY, -maxY, maxY);
+      }
+      var t = this.zoom > 1
+        ? 'translate3d(' + this.panX + 'px,' + this.panY + 'px,0) scale(' + this.zoom + ')'
+        : 'scale(' + this.zoom + ')';
+      track.style.transform = t;
       track.style.transformOrigin = 'center center';
+      // Cursor hint
+      var grabbable = this.zoom > 1;
+      track.classList.toggle('cwflip-grab', grabbable && !this._dragging);
+      track.classList.toggle('cwflip-grabbing', grabbable && this._dragging);
     },
 
     _showZoomBadge: function () {
@@ -856,9 +882,48 @@
         }
       }, { passive: false });
 
-      // Click on edges to flip (desktop)
+      // Mouse drag-to-pan when zoomed in (desktop)
+      var dragStart = null;
+      var dragMoved = false;
+      function onMouseMove(e) {
+        if (!dragStart) return;
+        var dx = e.clientX - dragStart.x;
+        var dy = e.clientY - dragStart.y;
+        if (!dragMoved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) dragMoved = true;
+        self.panX = dragStart.panX + dx;
+        self.panY = dragStart.panY + dy;
+        // Smooth: skip the transition while dragging so the cursor tracks 1:1
+        self._refs.track.style.transition = 'none';
+        self._applyZoomTransform();
+      }
+      function onMouseUp() {
+        if (!dragStart) return;
+        dragStart = null;
+        self._dragging = false;
+        // Restore transitions after a tick
+        setTimeout(function () { self._refs.track.style.transition = ''; }, 0);
+        self._applyZoomTransform();
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+      stage.addEventListener('mousedown', function (e) {
+        if (self.zoom <= 1 || isCoarsePointer() || e.button !== 0) return;
+        // Don't start dragging on chrome controls
+        if (e.target.closest && e.target.closest('.cwflip-bar')) return;
+        e.preventDefault();
+        dragStart = { x: e.clientX, y: e.clientY, panX: self.panX, panY: self.panY };
+        dragMoved = false;
+        self._dragging = true;
+        self._applyZoomTransform();
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+
+      // Click on edges to flip (desktop) — but only if no drag occurred
       stage.addEventListener('click', function (e) {
         if (isCoarsePointer()) return; // mobile uses tap-end logic above
+        if (dragMoved) { dragMoved = false; return; } // suppress click after drag
+        if (self.zoom > 1) return; // edge-tap nav disabled when zoomed
         var rect = stage.getBoundingClientRect();
         var rel = (e.clientX - rect.left) / rect.width;
         if (rel < 0.18) self.prev();

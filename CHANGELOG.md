@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.3 — 2026-04-27
+
+**Mouse drag-to-pan when zoomed (desktop).**
+
+When zoom > 1, the page can now be click-and-dragged around the stage. Pan offset clamps to keep the page's center within reach (you can't drag the page entirely off-stage). Edge-click navigation auto-disables while zoomed. Cursor switches between `grab` and `grabbing` for affordance.
+
 ## v1.0.2 — 2026-04-27
 
 **Polished page-flip animation.**
